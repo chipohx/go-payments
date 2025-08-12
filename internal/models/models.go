@@ -1,9 +1,10 @@
+// ORM models
 package models
 
 import "time"
 
 type Wallet struct {
-	Address  string  `json:"address"`
+	Address string  `json:"address"`
 	Balance float64 `json:"balance"`
 }
 
