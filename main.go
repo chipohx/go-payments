@@ -24,7 +24,7 @@ func main() {
 
 	log.Printf("запуск приложения...")
 
-	db, err := storage.New(dbFileName)
+	db, err := storage.New()
 	if err != nil {
 		log.Fatalf("ошибка при инициализации storage: %v", err)
 	}

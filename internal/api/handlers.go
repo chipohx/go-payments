@@ -21,6 +21,8 @@ Handlers:
     указания количества запрашиваемых транзакций.
   - GetBalance: Обрабатывает GET-запросы на `/api/wallet/{address}/balance` для
     получения текущего баланса кошелька по его адресу.
+  - GetWallets: Обрабатывает GET-запросы на `/api/wallets` для получения списка кошельков с балансом. 
+  	Поддерживает необязательный query-параметр `count` для указания количества запрашиваемых кошельков.
 */
 package api
 
@@ -40,6 +42,7 @@ import (
 type Storage interface {
 	GetWalletBalance(ctx context.Context, address string) (*models.Wallet, error)
 	GetLastTransactions(ctx context.Context, n int) ([]models.Transaction, error)
+	GetWallets(ctx context.Context, n int) ([]models.Wallet, error)
 	SendMoney(ctx context.Context, from string, to string, amount float64) error
 }
 
@@ -55,6 +58,7 @@ func (a *API) RegisterRoutes(r *chi.Mux) {
 	r.Post("/api/send", a.Send)
 	r.Get("/api/transactions", a.GetLast)
 	r.Get("/api/wallet/{address}/balance", a.GetBalance)
+	r.Get("/api/wallets", a.GetWallets)
 }
 
 func (a *API) Send(w http.ResponseWriter, r *http.Request) {
@@ -142,4 +146,27 @@ func (a *API) GetBalance(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(wallet)
+}
+
+func (a *API) GetWallets(w http.ResponseWriter, r *http.Request) {
+	countStr := r.URL.Query().Get("count")
+	if countStr == "" {
+		countStr = "10"
+	}
+
+	count, err := strconv.Atoi(countStr)
+	if err != nil || count <= 0 {
+		http.Error(w, "параметр 'count' должен быть положительным числом", http.StatusBadRequest)
+		return
+	}
+
+	wallets, err := a.db.GetWallets(r.Context(), count)
+	if err != nil {
+		log.Printf("ошибка получения wallets: %v", err)
+		http.Error(w, "внутренняя ошибка сервера", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(wallets)
 }

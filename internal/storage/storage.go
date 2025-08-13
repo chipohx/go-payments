@@ -14,6 +14,7 @@ storage предоставляет собой слой для взаимодей
     Эта операция выполняется в рамках одной транзакции для обеспечения атомарности.
     Она включает в себя проверку баланса отправителя, обновление балансов обоих
     кошельков и запись информации о транзакции.
+  - GetWallets: Получает N кошельков с балансом
 */
 package storage
 
@@ -24,14 +25,12 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"github.com/joho/godotenv"
 	"go-payments/internal/models"
 	"log"
 	"os"
 	"strconv"
 	"time"
-
-	// _ "github.com/mattn/go-sqlite3"
+	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 )
 
@@ -39,7 +38,8 @@ type Storage struct {
 	db *sql.DB
 }
 
-func New(storagePath string) (*Storage, error) {
+//Создает новый экземпляр Storage и устанавливает соединение с базой данных.
+func New() (*Storage, error) {
 
 	_ = godotenv.Load()
 
@@ -53,7 +53,6 @@ func New(storagePath string) (*Storage, error) {
 	password := os.Getenv("POSTGRES_PASSWORD")
 	dbname := os.Getenv("POSTGRES_DB")
 
-	// Проверка обязательных переменных
 	if host == "" || user == "" || dbname == "" || portStr == "" {
 		return nil, fmt.Errorf("missing required environment variables")
 	}
@@ -73,6 +72,8 @@ func New(storagePath string) (*Storage, error) {
 	return &Storage{db: db}, nil
 }
 
+//Инициализирует базу данных, создавая необходимые таблицы (`wallets`, `transactions`).
+//Если кошельки отсутствуют, создает 10 кошельков по умолчанию с начальным балансом.
 func (s *Storage) Init(ctx context.Context) error {
 	queryWallets := `
     CREATE TABLE IF NOT EXISTS wallets (
@@ -124,6 +125,7 @@ func (s *Storage) Init(ctx context.Context) error {
 	return nil
 }
 
+//Получает баланс кошелька с адрессом address
 func (s *Storage) GetWalletBalance(ctx context.Context, address string) (*models.Wallet, error) {
 	var wallet models.Wallet
 	query := "SELECT address, balance FROM wallets WHERE address = $1"
@@ -137,6 +139,30 @@ func (s *Storage) GetWalletBalance(ctx context.Context, address string) (*models
 	return &wallet, nil
 }
 
+//Получает N адрессов с балансом
+func (s *Storage) GetWallets(ctx context.Context, n int) ([]models.Wallet, error) {
+	query := "SELECT address, balance FROM wallets LIMIT $1"
+	rows, err := s.db.QueryContext(ctx, query, n)
+	if err != nil {
+		return nil, fmt.Errorf("не удалось получить транзакции: %w", err)
+	}
+	defer rows.Close()
+
+	var wallets []models.Wallet
+	for rows.Next() {
+		var w models.Wallet
+		if err := rows.Scan(&w.Address, &w.Balance); err != nil {
+			return nil, fmt.Errorf("ошибка сканирования строки wallets: %w", err)
+		}
+		wallets = append(wallets, w)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("ошибка при итерации по wallets: %w", err)
+	}
+	return wallets, nil
+}
+
+//GetLastTransactions: Получает N последних транзакций из базы данных.
 func (s *Storage) GetLastTransactions(ctx context.Context, n int) ([]models.Transaction, error) {
 	query := "SELECT id, from_address, to_address, amount, timestamp, status FROM transactions ORDER BY timestamp DESC LIMIT $1"
 	rows, err := s.db.QueryContext(ctx, query, n)
@@ -166,11 +192,11 @@ func (s *Storage) logTransaction(ctx context.Context, from, to string, amount fl
 		"INSERT INTO transactions (from_address, to_address, amount, timestamp, status) VALUES ($1, $2, $3, $4, $5)",
 		from, to, amount, time.Now(), status)
 	if err != nil {
-		log.Printf("КРИТИЧЕСКАЯ ОШИБКА: не удалось записать лог транзакции: %v", err)
+		log.Printf("ошибка: не удалось записать лог транзакции: %v", err)
 	}
 }
 
-// Записывает транзакцию в таблицу transactions внутри sql.tx.
+// Записывает транзакцию в таблицу transactions при успешном выполнении
 func logTransactionInTx(ctx context.Context, tx *sql.Tx, from, to string, amount float64, status models.TransactionStatus) error {
 	_, err := tx.ExecContext(ctx,
 		"INSERT INTO transactions (from_address, to_address, amount, timestamp, status) VALUES ($1, $2, $3, $4, $5)",
