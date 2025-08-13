@@ -25,20 +25,20 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/joho/godotenv"
+	_ "github.com/lib/pq"
 	"go-payments/internal/models"
 	"log"
 	"os"
 	"strconv"
 	"time"
-	"github.com/joho/godotenv"
-	_ "github.com/lib/pq"
 )
 
 type Storage struct {
 	db *sql.DB
 }
 
-//Создает новый экземпляр Storage и устанавливает соединение с базой данных.
+// Создает новый экземпляр Storage и устанавливает соединение с базой данных.
 func New() (*Storage, error) {
 
 	_ = godotenv.Load()
@@ -72,8 +72,8 @@ func New() (*Storage, error) {
 	return &Storage{db: db}, nil
 }
 
-//Инициализирует базу данных, создавая необходимые таблицы (`wallets`, `transactions`).
-//Если кошельки отсутствуют, создает 10 кошельков по умолчанию с начальным балансом.
+// Инициализирует базу данных, создавая необходимые таблицы (`wallets`, `transactions`).
+// Если кошельки отсутствуют, создает 10 кошельков по умолчанию с начальным балансом.
 func (s *Storage) Init(ctx context.Context) error {
 	queryWallets := `
     CREATE TABLE IF NOT EXISTS wallets (
@@ -125,7 +125,7 @@ func (s *Storage) Init(ctx context.Context) error {
 	return nil
 }
 
-//Получает баланс кошелька с адрессом address
+// Получает баланс кошелька с адрессом address
 func (s *Storage) GetWalletBalance(ctx context.Context, address string) (*models.Wallet, error) {
 	var wallet models.Wallet
 	query := "SELECT address, balance FROM wallets WHERE address = $1"
@@ -139,7 +139,7 @@ func (s *Storage) GetWalletBalance(ctx context.Context, address string) (*models
 	return &wallet, nil
 }
 
-//Получает N адрессов с балансом
+// Получает N адрессов с балансом
 func (s *Storage) GetWallets(ctx context.Context, n int) ([]models.Wallet, error) {
 	query := "SELECT address, balance FROM wallets LIMIT $1"
 	rows, err := s.db.QueryContext(ctx, query, n)
@@ -162,7 +162,7 @@ func (s *Storage) GetWallets(ctx context.Context, n int) ([]models.Wallet, error
 	return wallets, nil
 }
 
-//GetLastTransactions: Получает N последних транзакций из базы данных.
+// GetLastTransactions: Получает N последних транзакций из базы данных.
 func (s *Storage) GetLastTransactions(ctx context.Context, n int) ([]models.Transaction, error) {
 	query := "SELECT id, from_address, to_address, amount, timestamp, status FROM transactions ORDER BY timestamp DESC LIMIT $1"
 	rows, err := s.db.QueryContext(ctx, query, n)
