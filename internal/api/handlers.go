@@ -3,7 +3,7 @@ api предоставляет HTTP-интерфейс для взаимодей
 Он определяет маршруты и обработчики для выполнения основных операций, таких как
 перевод средств, получение истории транзакций и проверка баланса кошелька.
 
-Ключевые компоненты:
+Key components:
   - Storage (интерфейс): Абстракция, определяющая контракт для работы с хранилищем данных.
     Это позволяет отделить логику API от конкретной реализации базы данных,
     облегчая тестирование и замену хранилища.
@@ -12,7 +12,7 @@ api предоставляет HTTP-интерфейс для взаимодей
   - New: Конструктор для создания нового экземпляра API.
   - RegisterRoutes: Метод для регистрации всех маршрутов API с использованием роутера chi.
 
-Обработчики:
+Handlers:
   - Send: Обрабатывает POST-запросы на `/api/send` для перевода средств между кошельками.
     Принимает JSON-тело с адресами отправителя и получателя и суммой перевода.
     Выполняет валидацию и возвращает соответствующие HTTP-статусы.
@@ -26,10 +26,10 @@ package api
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"go-payments/internal/models"
+	"go-payments/internal/storage"
 	"log"
 	"net/http"
 	"strconv"
@@ -59,43 +59,46 @@ func (a *API) RegisterRoutes(r *chi.Mux) {
 
 func (a *API) Send(w http.ResponseWriter, r *http.Request) {
 	var req models.SendRequest
-
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "неверный формат запроса", http.StatusBadRequest)
 		return
 	}
-
 	defer r.Body.Close()
 
-	if req.Amount < 0 {
-		http.Error(w, "сумма перевода должна быть положительная", http.StatusBadRequest)
+	if req.Amount <= 0 {
+		http.Error(w, "сумма перевода должна быть положительной", http.StatusBadRequest)
 		return
 	}
-
 	if req.From == req.To {
-		http.Error(w, "Нельзя отправить деньги самому себе", http.StatusBadRequest)
+		http.Error(w, "нельзя отправить деньги самому себе", http.StatusBadRequest)
 		return
 	}
 
 	err := a.db.SendMoney(r.Context(), req.From, req.To, req.Amount)
 	if err != nil {
-		log.Printf("Ошибка при переводе средств")
-		if errors.Is(err, sql.ErrNoRows) ||
-			err.Error() == "кошелёк отправителя не найден" ||
-			err.Error() == "кошелёк получателя не найден" {
-			http.Error(w, err.Error(), http.StatusNotFound)
-			return
-		}
-		if err.Error() == "недостаточно средств на счёте" {
-			http.Error(w, err.Error(), http.StatusPaymentRequired)
-			return
+		log.Printf("ошибка при переводе средств от %s к %s на сумму %.2f: %v", req.From, req.To, req.Amount, err)
+
+		var txErr *storage.TransactionError
+		if errors.As(err, &txErr) {
+			switch txErr.Code {
+			case storage.CodeSenderNotFound, storage.CodeRecipientNotFound:
+				http.Error(w, txErr.Error(), http.StatusNotFound)
+				return
+			case storage.CodeInsufficientFunds:
+				http.Error(w, txErr.Error(), http.StatusPaymentRequired) // 402 Payment Required - очень подходящий статус
+				return
+			default:
+				http.Error(w, "внутренняя ошибка сервера", http.StatusInternalServerError)
+				return
+			}
 		}
 
 		http.Error(w, "внутренняя ошибка сервера", http.StatusInternalServerError)
 		return
 	}
 
-	w.WriteHeader(http.StatusCreated)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{"status": "success"})
 }
 
@@ -106,14 +109,15 @@ func (a *API) GetLast(w http.ResponseWriter, r *http.Request) {
 	}
 
 	count, err := strconv.Atoi(countStr)
-	if err != nil || count < 0 {
-		http.Error(w, "n должен быть положительным числом", http.StatusBadRequest)
+	if err != nil || count <= 0 {
+		http.Error(w, "параметр 'count' должен быть положительным числом", http.StatusBadRequest)
 		return
 	}
 
 	transactions, err := a.db.GetLastTransactions(r.Context(), count)
 	if err != nil {
-		http.Error(w, "внутренняя ошибка сервера -gg", http.StatusInternalServerError)
+		log.Printf("ошибка получения последних транзакций: %v", err)
+		http.Error(w, "внутренняя ошибка сервера", http.StatusInternalServerError)
 		return
 	}
 
@@ -122,16 +126,16 @@ func (a *API) GetLast(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) GetBalance(w http.ResponseWriter, r *http.Request) {
-
 	address := chi.URLParam(r, "address")
 
 	wallet, err := a.db.GetWalletBalance(r.Context(), address)
 	if err != nil {
-		if err.Error() == "кошелёк не найден" {
+		if errors.Is(err, storage.ErrWalletNotFound) {
 			http.Error(w, err.Error(), http.StatusNotFound)
 			return
 		}
-		log.Printf("ошибка прлучения баланса: %v", err)
+
+		log.Printf("ошибка получения баланса для кошелька %s: %v", address, err)
 		http.Error(w, "внутренняя ошибка сервера", http.StatusInternalServerError)
 		return
 	}
